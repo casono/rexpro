@@ -69,4 +69,15 @@ client.execute
     ["userName", "Mike Lowrey" :> obj]
 ```
 
+Example of session use
+```c#
+use session = new RexProSession("127.0.0.1", 8184, "graph", "", "")
 
+match session.execute "test = 5;" [] with
+| QuerySuccess _ -> 
+    match session.query<int> "test;" [] with
+    | QuerySuccess num -> printfn "test = %d" num
+    | QueryError e -> printfn "Error: %s" e.Message
+| QueryError e -> 
+    printfn "Error: %s" e.Message
+```
