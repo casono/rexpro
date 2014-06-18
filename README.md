@@ -29,7 +29,7 @@ Both query and execute takes a string with the query and a list with bindings.
 All bindings are tuples (string * obj)
 Example: 
 ```c# 
-["userName", "Mike Lowrey" :> obj]
+[("userName", "Mike Lowrey" :> obj);]
 ```
 
 Example of a simple data model:
