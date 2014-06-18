@@ -12,7 +12,10 @@ There is also a bunch of stuff I am going to improve/add.
 - Transaction support
 - +++
 
-Please clone and do whatever you want with this code, but please share.
+Please do whatever you want with this code, but please share.
+
+---
+NuGet: http://www.nuget.org/packages/CASO.DB.Titan.RexPro
 
 ---
 
