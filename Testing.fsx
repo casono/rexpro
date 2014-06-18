@@ -58,5 +58,5 @@ let test5() =
         match session.query<int> "test;" [] with
         | QuerySuccess num -> printfn "test = %d" num
         | QueryError e -> printfn "Error: %s" e.Message
-    | QueryError e
-        | QueryError e -> printfn "Error: %s" e.Message
+    | QueryError e -> 
+        printfn "Error: %s" e.Message
