@@ -18,7 +18,7 @@
 
 open CASO.DB.Titan.RexPro;;
 
-let client = new RexProClient("185.35.185.59", 8184, "mikael", "", "");;
+let client = new RexProClient("127.0.0.1", 8184, "graph", "", "");;
 
 /// Test 1 connection
 let test1() =
