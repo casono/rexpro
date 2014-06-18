@@ -32,7 +32,7 @@
     <OutputPath>bin\Release\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <WarningLevel>3</WarningLevel>
-    <DocumentationFile>bin\Release\CASO.Playlist.RexPro.XML</DocumentationFile>
+    <DocumentationFile>bin\Release\CASO.DB.Titan.RexPro.XML</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="mscorlib" />
