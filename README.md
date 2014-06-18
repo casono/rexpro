@@ -8,7 +8,7 @@ There is also a bunch of stuff I am going to improve/add.
 ##### TODO:
 - Better connection pooling
 - Editable properties for connection pool settings
-- Cleaner code within client.fs (seperate some logic etc.)
+- Cleaner code within client.fs (separate some logic etc.)
 - Transaction support
 - +++
 
