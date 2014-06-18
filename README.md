@@ -17,7 +17,7 @@ Please clone and do whatever you want with this code, but please share.
 ---
 
 Example of simple use. Count all vertices in graph
-```c#
+```f#
 open CASO.DB.Titan.RexPro
 
 let client = new RexProClient("127.0.0.1", 8184, "graph", "", "")
