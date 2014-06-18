@@ -5,7 +5,6 @@ open System
 //Agent alias for MailboxProcessor
 type Agent<'T> = MailboxProcessor<'T>
 
-///One of three messages for our Object Pool agent
 type PoolMessage<'a> =
     | Pop of AsyncReplyChannel<'a>
     | Push of ('a)
