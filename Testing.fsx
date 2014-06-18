@@ -48,4 +48,15 @@ let test4() =
         match client.query<int64> "g.V.count();" [] with
         | QuerySuccess count -> printfn "Vertex count: %d" count
         | QueryError e -> printfn "Error: %s" e.Message
-        
+
+/// Test session
+let test5() =
+    use session = new RexProSession("127.0.0.1", 8184, "graph", "", "")
+
+    match session.execute "test = 5;" [] with
+    | QuerySuccess _ -> 
+        match session.query<int> "test;" [] with
+        | QuerySuccess num -> printfn "test = %d" num
+        | QueryError e -> printfn "Error: %s" e.Message
+    | QueryError e
+        | QueryError e -> printfn "Error: %s" e.Message
