@@ -2,7 +2,7 @@ RexPro client in F#
 ---
 
 Just created this repo. More information on how to use the client is coming very soon.
-For now take a look at Testing.fsx for simpe use of the client.
+For now take a look at Testing.fsx for simple use of the client.
 There is also a bunch of stuff I am going to improve/add.
 
 ##### TODO:
