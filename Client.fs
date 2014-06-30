@@ -1,6 +1,7 @@
 ﻿namespace CASO.DB.Titan.RexPro
 
 open System
+open System.Net
 open System.Net.Sockets
 open System.Threading
 open System.IO
@@ -27,7 +28,7 @@ module internal Internals =
     open CASO.DB.Titan.RexPro.ObjectPool
 
     [<Literal>]
-    let ProtocolVersion = 1uy
+    let ProtocolVersion = 1
 
     [<Literal>]
     let MaxConnectionPoolSize = 1000
@@ -134,7 +135,7 @@ module internal Internals =
         /// Used to zero out the message header after received message.
         /// See: PooledSocket.MessageData
         let blankMessageHeader = { 
-            ProtocolVersion = ProtocolVersion; 
+            ProtocolVersion = (byte)ProtocolVersion; 
             SerializerType = SerializerType.Unknown; 
             MessageType = MessageType.Unknown; 
             MessageSize = 0; }
@@ -222,6 +223,7 @@ module internal Internals =
             socketEventArgs.SetBuffer(buffer, offset, count)
             if socket.SendAsync(socketEventArgs) then
                 waitHandle.WaitOne() |> ignore
+
             if socketEventArgs.SocketError <> SocketError.Success then 
                 raise (RexProClientException(sprintf "Could not send: %A" socketEventArgs.SocketError))
 
@@ -331,11 +333,18 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
 
             let! buffer = socketSendBufferPool.Pop()
 
+            // Get the remaining length
+            let readLength = 
+                (int)(stream.Length - stream.Position)
+                |> fun len ->
+                    if len > buffer.Length 
+                    then buffer.Length
+                    else len
             // We can ignore because we know it's going to fill up the buffer
             // See: BufferPoolStream
-            stream.Read(buffer, 0, buffer.Length) |> ignore
+            stream.Read(buffer, 0, readLength) |> ignore
 
-            socket.Send buffer 0 buffer.Length
+            socket.Send buffer 0 readLength
 
             if stream.Position < stream.Length then
                 do! socketSend socket stream
@@ -347,14 +356,16 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
     /// See: https://github.com/tinkerpop/rexster/wiki/RexPro-Messages
     /// Writes the header bytes to the stream
     let writeCommonMessageHeader (stream:Stream) =
-        stream.Write([|ProtocolVersion|], 0, 1)
-        stream.Write([|(byte)SerializerType.MsgPack|], 0, 1);
-        stream.Write([|0uy; 0uy; 0uy; 0uy;|], 0, 4);
+        stream.Write([|(byte)ProtocolVersion|], 0, 1)
+        stream.Write([|(byte)SerializerType.MsgPack|], 0, 1)
+        stream.Write([|0uy; 0uy; 0uy; 0uy;|], 0, 4)
 
     /// Writes the body type and body bytes to the stream
     let insertMessageBodyDetails (msgType:MessageType) (msgSize:int) (stream:Stream) =
-        stream.Write([|(byte)msgType|], 0, 1);
-        stream.Write((BitConverter.GetBytes(msgSize) |> Array.rev), 0, 4); // 4 bytes of our length
+        stream.Write([|(byte)msgType|], 0, 1)
+        if BitConverter.IsLittleEndian 
+        then stream.Write(BitConverter.GetBytes(msgSize) |> Array.rev, 0, 4) // 4 bytes of our length
+        else stream.Write(BitConverter.GetBytes(msgSize), 0, 4) // 4 bytes of our length
     
     /// Fill the send stream with our data/message
     let fillSendStream message sendStream =
