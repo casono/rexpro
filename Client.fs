@@ -7,6 +7,7 @@ open System.Threading
 open System.IO
 open System.Text.RegularExpressions
 open MsgPack.Serialization
+open Newtonsoft.Json
 
 open CASO.DB.Titan.RexPro.Messages
 open CASO.DB.Titan.RexPro.BufferPoolStream
@@ -17,6 +18,12 @@ type RexProClientException(message) =
 type QueryResult<'a> = 
     | QuerySuccess of 'a
     | QueryError of exn   
+
+/// Serializer types
+type SerializerType =
+    | MsgPack = 0
+    | Json = 1
+    | Unknown = 99
 
 [<AutoOpen>]
 module internal Internals =
@@ -49,7 +56,9 @@ module internal Internals =
     let SocketReceiveTimeout = 3000 // 3 second receive timeout
 
     /// Simple logger
+#if DEBUG
     let log = new LogAgent(sprintf @"%s\rexpro_log.txt" AppDomain.CurrentDomain.BaseDirectory)
+#endif
 
     /// Convert to a C# style Dictionary
     let inline bindingsToDic (bindings:list<string * _>) =
@@ -63,13 +72,7 @@ module internal Internals =
         | :?RexProClientException | :?AggregateException -> false // Could be treated as critical?, but this is just an example
         | :?System.ComponentModel.Win32Exception -> true
         | _ -> true // Yes all exceptions are critical
-    
-    /// Serializer types (only MsgPack implemented)
-    type SerializerType =
-        | MsgPack = 0
-        | Json = 1 // Not implemented
-        | Unknown = 99
-    
+        
     /// Valid message types int's
     type MessageType =
         | SessionRequest = 1
@@ -97,30 +100,46 @@ module internal Internals =
         | SessionOpen
         | SessionClose of Guid
     
-    /// Serializer for session request
-    let sessionRequestMessageSerializer = MessagePackSerializer.Create<SessionRequestMessage>()
+    module Serializers =
+        module MsgPack =
+            /// Serializer for session request
+            let sessionRequestMessageSerializer = SerializationContext.Default.GetSerializer<SessionRequestMessage>()
 
-    /// Serializer for session response
-    let sessionResponseMessageSerializer = MessagePackSerializer.Create<SessionResponseMessage>()
+            /// Serializer for session response
+            let sessionResponseMessageSerializer = SerializationContext.Default.GetSerializer<SessionResponseMessage>()
 
-    /// Serializer for script request
-    let scriptRequestMessageSerializer = MessagePackSerializer.Create<ScriptRequestMessage>()
+            /// Serializer for script request
+            let scriptRequestMessageSerializer = SerializationContext.Default.GetSerializer<ScriptRequestMessage>()
 
-    /// Cache for script response
-    let scriptResponseMessageSerializerCache = new System.Collections.Concurrent.ConcurrentDictionary<Type, IMessagePackSerializer>()
+            /// Cache for script response
+            let scriptResponseMessageSerializerCache = new System.Collections.Concurrent.ConcurrentDictionary<Type, IMessagePackSerializer>()
 
-    /// Serializer(s) for script responses. Cached for each type 
-    let scriptResponseMessageSerializer<'a> =
-        let isCached, serializer = scriptResponseMessageSerializerCache.TryGetValue(typeof<'a>)
-        if isCached then
-            serializer :?> MessagePackSerializer<'a>
-        else
-            let serializer = MessagePackSerializer.Create<'a>()
-            scriptResponseMessageSerializerCache.TryAdd(typeof<'a>, serializer) |> ignore
-            serializer
+            /// Serializer(s) for script responses. Cached for each type 
+            let scriptResponseMessageSerializer<'a> =
+                let isCached, serializer = scriptResponseMessageSerializerCache.TryGetValue(typeof<'a>)
+                if isCached then
+                    serializer :?> MessagePackSerializer<'a>
+                else
+                    let serializer = SerializationContext.Default.GetSerializer<'a>()
+                    scriptResponseMessageSerializerCache.TryAdd(typeof<'a>, serializer) |> ignore
+                    serializer
     
-    /// Serializer for error responses
-    let errorResponseMessageSerializer = MessagePackSerializer.Create<ErrorResponseMessage>()
+            /// Serializer for error responses
+            let errorResponseMessageSerializer = SerializationContext.Default.GetSerializer<ErrorResponseMessage>()
+
+        module Json =
+
+            open Newtonsoft.Json.Serialization
+        
+            let serializer = 
+                JsonSerializerSettings()
+                |> fun settings ->
+                    settings.ContractResolver <- new CamelCasePropertyNamesContractResolver() :> IContractResolver
+                    settings.DateFormatHandling <- Newtonsoft.Json.DateFormatHandling.MicrosoftDateFormat
+                    settings.ReferenceLoopHandling <- Newtonsoft.Json.ReferenceLoopHandling.Ignore
+                    settings.PreserveReferencesHandling <- Newtonsoft.Json.PreserveReferencesHandling.None
+                    settings.Formatting <- Formatting.None
+                    JsonSerializer.Create(settings)
 
     /// Converts a IP string to a IP address
     let createIPEndPoint endPointStr =
@@ -217,7 +236,12 @@ module internal Internals =
                 if socketEventArgs.SocketError <> SocketError.Success then 
                     raise (RexProClientException(sprintf "Could not disconnect: %A" socketEventArgs.SocketError))
             with
-            | e -> log.error(e.ToString())
+            | e -> 
+#if DEBUG
+                log.error(e.ToString())
+#else
+                ()
+#endif
 
         member x.Send buffer offset count = 
             socketEventArgs.SetBuffer(buffer, offset, count)
@@ -355,9 +379,9 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
     
     /// See: https://github.com/tinkerpop/rexster/wiki/RexPro-Messages
     /// Writes the header bytes to the stream
-    let writeCommonMessageHeader (stream:Stream) =
+    let writeCommonMessageHeader (serializerType:SerializerType) (stream:Stream) =
         stream.Write([|(byte)ProtocolVersion|], 0, 1)
-        stream.Write([|(byte)SerializerType.MsgPack|], 0, 1)
+        stream.Write([|(byte)serializerType|], 0, 1)
         stream.Write([|0uy; 0uy; 0uy; 0uy;|], 0, 4)
 
     /// Writes the body type and body bytes to the stream
@@ -368,25 +392,35 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         else stream.Write(BitConverter.GetBytes(msgSize), 0, 4) // 4 bytes of our length
     
     /// Fill the send stream with our data/message
-    let fillSendStream message sendStream =
+    let fillSendStream message (serializerType:SerializerType) sendStream =
         // Use a memorystream for writing our send data 
-        // MsgPack requires a stream so .. yeah..
-        sendStream |> writeCommonMessageHeader
+        sendStream |> writeCommonMessageHeader serializerType
         sendStream.Seek(11L, SeekOrigin.Begin) |> ignore
 
-        // Write the body MsgPack bytes
+        // Write the body bytes
         let msgType =
             match message with
             | ScriptRequest msg ->
-                scriptRequestMessageSerializer.Pack(sendStream, msg)
+                match serializerType with
+                | SerializerType.MsgPack -> Serializers.MsgPack.scriptRequestMessageSerializer.Pack(sendStream, msg)
+                | SerializerType.Json -> 
+                    let sw = new StreamWriter(sendStream)
+                    Serializers.Json.serializer.Serialize(sw, msg, typeof<ScriptRequestMessage>)
+                    sw.Flush()
+                | _ -> raise(exn("Unknown serializer type"))
                 MessageType.ScriptRequest
             | SessionRequest msg ->
-                sessionRequestMessageSerializer.Pack(sendStream, msg)
+                match serializerType with
+                | SerializerType.MsgPack -> Serializers.MsgPack.sessionRequestMessageSerializer.Pack(sendStream, msg)
+                | SerializerType.Json -> 
+                    let sw = new StreamWriter(sendStream)
+                    Serializers.Json.serializer.Serialize(sw, msg, typeof<SessionRequestMessage>)
+                    sw.Flush()
+                | _ -> raise(exn("Unknown serializer type"))                
                 MessageType.SessionRequest
-            
+        
         // store the total length position
         let msgBodySize = (int)(sendStream.Length - 11L)
-
         // Seeks to where the body details should be placed
         sendStream.Seek(6L, SeekOrigin.Begin) |> ignore
         // Insert the body details
@@ -417,18 +451,17 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
 
     /// Sends the message bytes using Socket to server
     /// Returns the response messageType and it's body bytes as a stream
-    let sendMessage (message:RequestMessageType) =
+    let sendMessage (serializerType:SerializerType) (message:RequestMessageType) =
         async {
             // Prepare our message
             use sendStream = new BufferPoolStream(socketSendBufferPool)
             
-            sendStream |> fillSendStream message
+            sendStream |> fillSendStream message serializerType
 
             // Get socket and args from pool
             let! socket = socketConnectionPool.Pop()
             
             socket |> prepareSocket
-
             // Write the bytes
             do! socketSend socket sendStream
 
@@ -465,14 +498,14 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
             SessionRequest(msg)
         | SessionClose id ->
             msg.Meta.Add("killSession", true)
-            msg.Session <- id.ToByteArray()
+            msg.Session <- id
             SessionRequest(msg)
 
     /// Create a ScriptRequestMessage
     let createScriptRequestMessage script bindings sessionId =
         let msg = new ScriptRequestMessage(script, bindings |> bindingsToDic)
         if sessionId <> Guid.Empty then
-            msg.Session <- sessionId.ToByteArray()
+            msg.Session <- sessionId
             msg.Meta.Add("inSession", true)
             msg.Meta.Add("isolate", false)
         else
@@ -487,25 +520,44 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         ScriptRequest(msg)
 
     /// Construct a RexProClientException with the ErrorMessage from the ErrorResponseMessage
-    let errorMessageResponseException receiveStream =
-        errorResponseMessageSerializer.Unpack receiveStream
-        |> fun errorMsg -> (new RexProClientException(errorMsg.ErrorMessage))
+    let errorMessageResponseException (serializerType:SerializerType) receiveStream =
+        match serializerType with
+        | SerializerType.MsgPack -> Serializers.MsgPack.errorResponseMessageSerializer.Unpack receiveStream
+        | SerializerType.Json -> 
+            Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
+            |> fun arr ->
+                let msg = new ErrorResponseMessage()
+                msg.Session <- Guid.Parse(arr.[0] :?> string)
+                msg.Request <- Guid.Parse(arr.[1] :?> string)
+                msg.ErrorMessage <- arr.[3] :?> string
+                msg
+        | _ -> raise(exn("Unknown serializer type"))
+        |> fun errorMsg ->
+            (new RexProClientException(errorMsg.ErrorMessage))
     
     /// Try to write the fatal exception to log (surrounded by try catch in case the logger itself is throwing the exception)
     let tryLogFatal (ex:exn) =
+#if DEBUG
         try 
             log.fatal(sprintf "Message: %s\nStackTrace: %s" ex.Message ex.StackTrace)
             log.flush()
         with
         | _ -> ()
+#else
+        ()
+#endif
 
     /// Try to write the error exception to log (surrounded by try catch in case the logger itself is throwing the exception)
     let tryLogError (ex:exn) =
+#if DEBUG
         try 
             log.error(sprintf "Message: %s\nStackTrace: %s" ex.Message ex.StackTrace)
             log.flush()
         with
         | _ -> ()
+#else
+        ()
+#endif
 
     /// Removes comment blocks, newlines and excess space
     let prepareScript script =
@@ -515,33 +567,46 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         |> String.concat " "
         |> fun s -> s.Replace(" .", ".")
 
-    member val graphName = graphName with get, set
-    member val sessionId = Guid.Empty with get, set
+
+    /// Public properties and methods 
+    /// ##########################################################################################################
+
+    member val GraphName = graphName with get, set
+    member val SessionId = Guid.Empty with get, set
+    member val SerializerType = SerializerType.Json with get, set
     
     /// Open a new session, all consequent queries or executes will use this session Id until closeSession() is called
-    member x.openSessionAsync() =
+    member x.OpenSessionAsync() =
         async {
-            if x.sessionId <> Guid.Empty then raise (RexProClientException("Already in a session"))
+            if x.SessionId <> Guid.Empty then raise (RexProClientException("Already in a session"))
 
             try
                 let msg = createSessionRequestMessage SessionOpen
                 let! messageType, receiveStream =
                     createSessionRequestMessage SessionOpen
-                    |> sendMessage
+                    |> sendMessage x.SerializerType
 
                 match messageType with
                 | MessageType.SessionResponse -> 
-                    sessionResponseMessageSerializer.Unpack receiveStream
-                    |> fun msg ->
-                        x.sessionId <- Guid(msg.Session)
+                    match x.SerializerType with
+                    | SerializerType.MsgPack -> Serializers.MsgPack.sessionResponseMessageSerializer.Unpack receiveStream
+                    | SerializerType.Json -> 
+                        Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
+                        |> fun arr ->
+                            let msg = new SessionResponseMessage()
+                            msg.Session <- Guid.Parse(arr.[0] :?> string)
+                            msg.Request <- Guid.Parse(arr.[1] :?> string)
+                            msg
+                    | _ -> raise(exn("Unknown serializer type"))
+                    |> fun msg -> x.SessionId <- msg.Session
                 | MessageType.ErrorResponse -> 
-                    raise (errorMessageResponseException receiveStream)
+                    raise (errorMessageResponseException x.SerializerType receiveStream)
                 | _ -> 
                     raise (RexProClientException(sprintf "Unexpected message type: %A" messageType))
 
                 receiveStream.Dispose()
 
-                return Some x.sessionId
+                return Some x.SessionId
             with
             | e when isCriticalException e ->
                 tryLogFatal e
@@ -552,28 +617,36 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         }
 
     /// Open a new session
-    member x.openSession() =
-        x.openSessionAsync() |> Async.RunSynchronously
+    member x.OpenSession() =
+        x.OpenSessionAsync() |> Async.RunSynchronously
 
     /// Close a session with Id
-    member x.closeSessionAsync() =
+    member x.CloseSessionAsync() =
         async {
             // Raise exception if not in a session
-            if x.sessionId = Guid.Empty then raise (RexProClientException("Not in a session"))
+            if x.SessionId = Guid.Empty then raise (RexProClientException("Not in a session"))
 
             try
                 let! messageType, receiveStream =
-                    createSessionRequestMessage (SessionClose x.sessionId)
-                    |> sendMessage
+                    createSessionRequestMessage (SessionClose x.SessionId)
+                    |> sendMessage x.SerializerType
 
                 let returnedSessionId =
                     match messageType with
                     | MessageType.SessionResponse -> 
-                        sessionResponseMessageSerializer.Unpack receiveStream
-                        |> fun msg ->
-                            Guid(msg.Session)
+                        match x.SerializerType with
+                        | SerializerType.MsgPack -> Serializers.MsgPack.sessionResponseMessageSerializer.Unpack receiveStream
+                        | SerializerType.Json -> 
+                            Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
+                            |> fun arr ->
+                                let msg = new SessionResponseMessage()
+                                msg.Session <- Guid.Parse(arr.[0] :?> string)
+                                msg.Request <- Guid.Parse(arr.[1] :?> string)
+                                msg
+                        | _ -> raise(exn("Unknown serializer type"))
+                        |> fun msg -> msg.Session
                     | MessageType.ErrorResponse -> 
-                        raise (errorMessageResponseException receiveStream)
+                        raise (errorMessageResponseException x.SerializerType receiveStream)
                     | _ -> 
                         raise (RexProClientException(sprintf "Unexpected message type: %A" messageType))
 
@@ -582,7 +655,7 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                 if returnedSessionId <> Guid.Empty then
                     raise (RexProClientException(sprintf "Unexpected Session ID: [%s]" (returnedSessionId.ToString())))
         
-                x.sessionId <- Guid.Empty
+                x.SessionId <- Guid.Empty
             with
             | e when isCriticalException e ->
                 tryLogFatal e
@@ -591,11 +664,11 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         }
 
     /// Close the current session
-    member x.closeSession() =
-        x.closeSessionAsync() |> Async.RunSynchronously
+    member x.CloseSession() =
+        x.CloseSessionAsync() |> Async.RunSynchronously
     
     /// Do a query async
-    member x.queryAsync<'a> (script:string) (bindings:list<string * _>) =
+    member x.QueryAsync<'a> (script:string) (bindings:list<string * _>) =
         async {
             try
                 let preparedScript = prepareScript script
@@ -604,17 +677,27 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                 sw.Restart() // reset stopwatch (make sure it's 0)
 #endif
                 let! messageType, receiveStream =
-                    createScriptRequestMessage preparedScript bindings x.sessionId
-                    |> sendMessage
+                    createScriptRequestMessage preparedScript bindings x.SessionId
+                    |> sendMessage x.SerializerType
 
                 let result =
                     match messageType with
                     | MessageType.ScriptResponse -> 
-                        scriptResponseMessageSerializer<ScriptResponseMessage<'a>>.Unpack receiveStream
+                        match x.SerializerType with
+                        | SerializerType.MsgPack -> Serializers.MsgPack.scriptResponseMessageSerializer.Unpack receiveStream
+                        | SerializerType.Json ->                    
+                            Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
+                            |> fun arr ->
+                                let msg = new ScriptResponseMessage()
+                                msg.Session <- Guid.Parse(arr.[0] :?> string)
+                                msg.Request <- Guid.Parse(arr.[1] :?> string)
+                                msg.Results <- (arr.[3] :?> Newtonsoft.Json.Linq.JContainer) |> fun obj -> obj.ToObject(typeof<'a>)
+                                msg
+                        | _ -> raise(exn("Unknown serializer type"))
                         |> fun msg ->
-                            QuerySuccess msg.Results
+                            QuerySuccess (msg.Results :?> 'a)
                     | MessageType.ErrorResponse -> 
-                        QueryError (errorMessageResponseException receiveStream)
+                        QueryError (errorMessageResponseException x.SerializerType receiveStream)
                     | _ -> 
                         QueryError (RexProClientException(sprintf "Unexpected message type: %A" messageType))
 
@@ -635,12 +718,12 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         }
 
     /// Do a query
-    member x.query<'a> (script:string) (bindings:list<string * _>) =
-        x.queryAsync<'a> script bindings
+    member x.Query<'a> (script:string) (bindings:list<string * _>) =
+        x.QueryAsync<'a> script bindings
         |> Async.RunSynchronously
 
     /// Do a execute async
-    member x.executeAsync (script:string) (bindings:list<string * _>) =
+    member x.ExecuteAsync (script:string) (bindings:list<string * _>) =
         async {
             try
                 let preparedScript = prepareScript script
@@ -649,15 +732,15 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                 sw.Restart()
 #endif
                 let! messageType, receiveStream =
-                    createScriptRequestMessage preparedScript bindings x.sessionId
-                    |> sendMessage
+                    createScriptRequestMessage preparedScript bindings x.SessionId
+                    |> sendMessage x.SerializerType
 
                 let result =
                     match messageType with
                     | MessageType.ScriptResponse ->
                         QuerySuccess ()
                     | MessageType.ErrorResponse -> 
-                        QueryError (errorMessageResponseException receiveStream)
+                        QueryError (errorMessageResponseException x.SerializerType receiveStream)
                     | _ -> 
                         QueryError (RexProClientException(sprintf "Unexpected message type: %A" messageType))
 
@@ -678,8 +761,8 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
         }
     
     /// Do a execute
-    member x.execute (script:string) (bindings:list<string * _>) =
-        x.executeAsync script bindings
+    member x.Execute (script:string) (bindings:list<string * _>) =
+        x.ExecuteAsync script bindings
         |> Async.RunSynchronously
 
 /// Convenience class for easier use of a session.
@@ -687,29 +770,29 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
 type RexProSession(client:RexProClient) =
     
     do
-        match client.openSession() with
+        match client.OpenSession() with
         | Some id -> ()
         | None -> raise (RexProClientException("Failed to get Session ID"))
 
     interface IDisposable with 
         member x.Dispose() =
-            client.closeSession()
+            client.CloseSession()
 
     member x.Dispose() = (x :> IDisposable).Dispose()
 
-    member val sessionId = client.sessionId with get
+    member val SessionId = client.SessionId with get
 
-    member x.query<'a> (script:string) (bindings:list<string * _>) =
-        client.query<'a> script bindings
+    member x.Query<'a> (script:string) (bindings:list<string * _>) =
+        client.Query<'a> script bindings
 
-    member x.queryAsync<'a> (script:string) (bindings:list<string * _>) =
-        client.queryAsync<'a> script bindings
+    member x.QueryAsync<'a> (script:string) (bindings:list<string * _>) =
+        client.QueryAsync<'a> script bindings
 
-    member x.execute (script:string) (bindings:list<string * _>) =
-        client.execute script bindings
+    member x.Execute (script:string) (bindings:list<string * _>) =
+        client.Execute script bindings
 
-    member x.executeAsync (script:string) (bindings:list<string * _>) =
-        client.execute script bindings
+    member x.ExecuteAsync (script:string) (bindings:list<string * _>) =
+        client.Execute script bindings
 
     new (host, port, graphName, username, password) = 
         let client = new RexProClient(host, port, graphName, username, password)

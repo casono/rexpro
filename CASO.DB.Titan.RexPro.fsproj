@@ -40,18 +40,22 @@
       <Private>True</Private>
     </Reference>
     <Reference Include="MsgPack">
-      <HintPath>packages\MsgPack.Cli.0.4.4\lib\net40-client\MsgPack.dll</HintPath>
+      <HintPath>packages\MsgPack.Cli.0.5.1\lib\net45\MsgPack.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>packages\Newtonsoft.Json.6.0.4\lib\net45\Newtonsoft.Json.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="System" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AssemblyInfo.fs" />
     <Compile Include="LogAgent.fs" />
     <Compile Include="ObjectPool.fs" />
     <Compile Include="BufferPoolStream.fs" />
     <Compile Include="Messages.fs" />
     <Compile Include="Client.fs" />
-    <Compile Include="AssemblyInfo.fs" />
     <None Include="Testing.fsx" />
     <None Include="packages.config" />
   </ItemGroup>
