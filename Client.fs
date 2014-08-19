@@ -691,7 +691,12 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                                 let msg = new ScriptResponseMessage()
                                 msg.Session <- Guid.Parse(arr.[0] :?> string)
                                 msg.Request <- Guid.Parse(arr.[1] :?> string)
-                                msg.Results <- (arr.[3] :?> Newtonsoft.Json.Linq.JContainer) |> fun obj -> obj.ToObject(typeof<'a>)
+                                
+                                if typeof<Newtonsoft.Json.Linq.JToken>.IsAssignableFrom(arr.[3].GetType()) then
+                                    msg.Results <- (arr.[3] :?> Newtonsoft.Json.Linq.JToken) |> fun obj -> obj.ToObject(typeof<'a>)
+                                else
+                                    msg.Results <- arr.[3]
+
                                 msg
                         | _ -> raise(exn("Unknown serializer type"))
                         |> fun msg ->
