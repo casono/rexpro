@@ -59,6 +59,7 @@ type ScriptRequestMessage(script:string, bindings:Dictionary<string, obj>) =
             arr.GetEnumerator()
     new() = ScriptRequestMessage("", new Dictionary<string, obj>())
 
+[<JsonConverter(typeof<SessionResponseMessageConverter>)>]
 type SessionResponseMessage() =
     [<MessagePackMember(0)>]
     member val Session = Guid.Empty with get, set
@@ -68,6 +69,24 @@ type SessionResponseMessage() =
     member val Meta = new Dictionary<string, obj>() with get, set
     [<MessagePackMember(3)>]
     member val Languages = [|"groovy"|] with get, set
+
+and SessionResponseMessageConverter() = 
+    inherit JsonConverter()
+    
+    override x.WriteJson(writer, value, serializer) =
+        raise (NotImplementedException())
+    
+    /// TODO: Find another way to deserialize (reflection is slow)
+    override x.ReadJson(reader, objectType, existingValue, serializer) =
+        let msg = new SessionResponseMessage()
+        let arr = JArray.ReadFrom(reader)
+
+        msg.Session <- Guid.Parse(arr.[0].Value<String>())
+        msg.Request <- Guid.Parse(arr.[1].Value<String>())
+
+        msg :> obj
+
+    override x.CanConvert(objectType) = true
 
 [<JsonConverter(typeof<ScriptResponseMessageConverter>)>]
 type ScriptResponseMessage<'a>() =
@@ -108,7 +127,7 @@ and ScriptResponseMessageConverter() =
 
     override x.CanConvert(objectType) = true
 
-
+[<JsonConverter(typeof<ErrorResponseMessageConverter>)>]
 type ErrorResponseMessage() =
     [<MessagePackMember(0)>]
     member val Session = Guid.Empty with get, set
@@ -118,3 +137,23 @@ type ErrorResponseMessage() =
     member val Meta = new Dictionary<string, obj>() with get, set
     [<MessagePackMember(3)>]
     member val ErrorMessage = "" with get, set
+
+and ErrorResponseMessageConverter() = 
+    inherit JsonConverter()
+    
+    override x.WriteJson(writer, value, serializer) =
+        raise (NotImplementedException())
+    
+    /// TODO: Find another way to deserialize (reflection is slow)
+    override x.ReadJson(reader, objectType, existingValue, serializer) =
+        let msg = new ErrorResponseMessage()
+        let arr = JArray.ReadFrom(reader)
+
+        msg.Session <- Guid.Parse(arr.[0].Value<String>())
+        msg.Request <- Guid.Parse(arr.[1].Value<String>())
+        msg.ErrorMessage <- arr.[3].Value<String>()
+
+        msg :> obj
+
+    override x.CanConvert(objectType) = true
+

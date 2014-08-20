@@ -523,14 +523,7 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
     let errorMessageResponseException (serializerType:SerializerType) receiveStream =
         match serializerType with
         | SerializerType.MsgPack -> Serializers.MsgPack.errorResponseMessageSerializer.Unpack receiveStream
-        | SerializerType.Json -> 
-            Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
-            |> fun arr ->
-                let msg = new ErrorResponseMessage()
-                msg.Session <- Guid.Parse(arr.[0] :?> string)
-                msg.Request <- Guid.Parse(arr.[1] :?> string)
-                msg.ErrorMessage <- arr.[3] :?> string
-                msg
+        | SerializerType.Json -> Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<ErrorResponseMessage>) :?> ErrorResponseMessage
         | _ -> raise(exn("Unknown serializer type"))
         |> fun errorMsg ->
             (new RexProClientException(errorMsg.ErrorMessage))
@@ -636,13 +629,7 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                     | MessageType.SessionResponse -> 
                         match x.SerializerType with
                         | SerializerType.MsgPack -> Serializers.MsgPack.sessionResponseMessageSerializer.Unpack receiveStream
-                        | SerializerType.Json -> 
-                            Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
-                            |> fun arr ->
-                                let msg = new SessionResponseMessage()
-                                msg.Session <- Guid.Parse(arr.[0] :?> string)
-                                msg.Request <- Guid.Parse(arr.[1] :?> string)
-                                msg
+                        | SerializerType.Json -> Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<SessionResponseMessage>) :?> SessionResponseMessage
                         | _ -> raise(exn("Unknown serializer type"))
                         |> fun msg -> msg.Session
                     | MessageType.ErrorResponse -> 
