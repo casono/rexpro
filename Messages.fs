@@ -5,6 +5,7 @@ open System.Collections
 open System.Collections.Generic
 open MsgPack.Serialization
 open Newtonsoft.Json
+open Newtonsoft.Json.Linq
 
 // Messages: https://github.com/tinkerpop/rexster/wiki/RexPro-Messages
 // session, script, error
@@ -68,7 +69,8 @@ type SessionResponseMessage() =
     [<MessagePackMember(3)>]
     member val Languages = [|"groovy"|] with get, set
 
-type ScriptResponseMessage() =
+[<JsonConverter(typeof<ScriptResponseMessageConverter>)>]
+type ScriptResponseMessage<'a>() =
     [<MessagePackMember(0)>]
     member val Session = Guid.Empty with get, set
     [<MessagePackMember(1)>]
@@ -77,9 +79,35 @@ type ScriptResponseMessage() =
     [<JsonProperty(Order = 2)>]
     member val Meta = new Dictionary<string, obj>() with get, set
     [<MessagePackMember(3)>]
-    member val Results = null with get, set
+    member val Results = Unchecked.defaultof<'a> with get, set
     [<MessagePackMember(4)>]
     member val Bindings = new Dictionary<string, obj>() with get, set
+
+and ScriptResponseMessageConverter() = 
+    inherit JsonConverter()
+    
+    override x.WriteJson(writer, value, serializer) =
+        raise (NotImplementedException())
+    
+    /// TODO: Find another way to deserialize (reflection is slow)
+    override x.ReadJson(reader, objectType, existingValue, serializer) =
+        let msgGenericType = typedefof<ScriptResponseMessage<_>>
+        let responseType = objectType.GetGenericArguments().[0]
+        let msgType = msgGenericType.MakeGenericType([|responseType|])
+        let msg = Activator.CreateInstance(msgType)
+        let arr = JArray.ReadFrom(reader)
+
+        let session = Guid.Parse(arr.[0].Value<String>())
+        let request = Guid.Parse(arr.[1].Value<String>())
+        let result = arr.[3].ToObject(responseType)
+
+        msgType.GetProperty("Session").SetValue(msg, session)
+        msgType.GetProperty("Request").SetValue(msg, request)
+        msgType.GetProperty("Results").SetValue(msg, result)
+        msg
+
+    override x.CanConvert(objectType) = true
+
 
 type ErrorResponseMessage() =
     [<MessagePackMember(0)>]

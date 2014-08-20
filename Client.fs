@@ -685,22 +685,10 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                     | MessageType.ScriptResponse -> 
                         match x.SerializerType with
                         | SerializerType.MsgPack -> Serializers.MsgPack.scriptResponseMessageSerializer.Unpack receiveStream
-                        | SerializerType.Json ->                    
-                            Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
-                            |> fun arr ->
-                                let msg = new ScriptResponseMessage()
-                                msg.Session <- Guid.Parse(arr.[0] :?> string)
-                                msg.Request <- Guid.Parse(arr.[1] :?> string)
-                                
-                                if typeof<Newtonsoft.Json.Linq.JToken>.IsAssignableFrom(arr.[3].GetType()) then
-                                    msg.Results <- (arr.[3] :?> Newtonsoft.Json.Linq.JToken) |> fun obj -> obj.ToObject(typeof<'a>)
-                                else
-                                    msg.Results <- arr.[3]
-
-                                msg
+                        | SerializerType.Json -> Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<ScriptResponseMessage<'a>>) :?> ScriptResponseMessage<'a>  
                         | _ -> raise(exn("Unknown serializer type"))
                         |> fun msg ->
-                            QuerySuccess (msg.Results :?> 'a)
+                            QuerySuccess msg.Results
                     | MessageType.ErrorResponse -> 
                         QueryError (errorMessageResponseException x.SerializerType receiveStream)
                     | _ -> 
