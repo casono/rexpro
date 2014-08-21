@@ -8,6 +8,7 @@ open System.IO
 open System.Text.RegularExpressions
 open MsgPack.Serialization
 open Newtonsoft.Json
+open Newtonsoft.Json.Linq
 
 open CASO.DB.Titan.RexPro.Messages
 open CASO.DB.Titan.RexPro.BufferPoolStream
@@ -523,7 +524,14 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
     let errorMessageResponseException (serializerType:SerializerType) receiveStream =
         match serializerType with
         | SerializerType.MsgPack -> Serializers.MsgPack.errorResponseMessageSerializer.Unpack receiveStream
-        | SerializerType.Json -> Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<ErrorResponseMessage>) :?> ErrorResponseMessage
+        | SerializerType.Json -> 
+            Serializers.Json.serializer.Deserialize(new JsonTextReader(new StreamReader(receiveStream))) :?> JArray
+            |> fun arr ->
+                ErrorResponseMessage(
+                    Session = Guid.Parse(arr.[0].Value<String>()),
+                    Request = Guid.Parse(arr.[1].Value<String>()),
+                    ErrorMessage = arr.[3].Value<String>()
+                )
         | _ -> raise(exn("Unknown serializer type"))
         |> fun errorMsg ->
             (new RexProClientException(errorMsg.ErrorMessage))
@@ -584,12 +592,12 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                     match x.SerializerType with
                     | SerializerType.MsgPack -> Serializers.MsgPack.sessionResponseMessageSerializer.Unpack receiveStream
                     | SerializerType.Json -> 
-                        Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<obj[]>) :?> obj[]
+                        Serializers.Json.serializer.Deserialize(new JsonTextReader(new StreamReader(receiveStream))) :?> JArray
                         |> fun arr ->
-                            let msg = new SessionResponseMessage()
-                            msg.Session <- Guid.Parse(arr.[0] :?> string)
-                            msg.Request <- Guid.Parse(arr.[1] :?> string)
-                            msg
+                            SessionResponseMessage(
+                                Session = Guid.Parse(arr.[0].Value<String>()),
+                                Request = Guid.Parse(arr.[1].Value<String>())
+                            )
                     | _ -> raise(exn("Unknown serializer type"))
                     |> fun msg -> x.SessionId <- msg.Session
                 | MessageType.ErrorResponse -> 
@@ -629,7 +637,13 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                     | MessageType.SessionResponse -> 
                         match x.SerializerType with
                         | SerializerType.MsgPack -> Serializers.MsgPack.sessionResponseMessageSerializer.Unpack receiveStream
-                        | SerializerType.Json -> Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<SessionResponseMessage>) :?> SessionResponseMessage
+                        | SerializerType.Json -> 
+                            Serializers.Json.serializer.Deserialize(new JsonTextReader(new StreamReader(receiveStream))) :?> JArray
+                            |> fun arr ->
+                                SessionResponseMessage(
+                                    Session = Guid.Parse(arr.[0].Value<String>()),
+                                    Request = Guid.Parse(arr.[1].Value<String>())
+                                )
                         | _ -> raise(exn("Unknown serializer type"))
                         |> fun msg -> msg.Session
                     | MessageType.ErrorResponse -> 
@@ -672,7 +686,14 @@ type RexProClient(host:string, port:int, graphName:string, username:string, pass
                     | MessageType.ScriptResponse -> 
                         match x.SerializerType with
                         | SerializerType.MsgPack -> Serializers.MsgPack.scriptResponseMessageSerializer.Unpack receiveStream
-                        | SerializerType.Json -> Serializers.Json.serializer.Deserialize(new StreamReader(receiveStream), typeof<ScriptResponseMessage<'a>>) :?> ScriptResponseMessage<'a>  
+                        | SerializerType.Json -> 
+                            Serializers.Json.serializer.Deserialize(new JsonTextReader(new StreamReader(receiveStream))) :?> JArray
+                            |> fun arr ->
+                                ScriptResponseMessage<'a>(
+                                    Session = Guid.Parse(arr.[0].Value<String>()),
+                                    Request = Guid.Parse(arr.[1].Value<String>()),
+                                    Results = arr.[3].ToObject<'a>()
+                                )
                         | _ -> raise(exn("Unknown serializer type"))
                         |> fun msg ->
                             QuerySuccess msg.Results
