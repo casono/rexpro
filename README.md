@@ -1,7 +1,6 @@
 RexPro client in F#
 ---
 
-Just created this repo. More information on how to use the client is coming very soon.
 For now take a look at Testing.fsx for simple use of the client.
 There is also a bunch of stuff I am going to improve/add.
 
@@ -13,8 +12,6 @@ See http://s3.thinkaurelius.com/docs/titan/0.5.0/ for Titan graph specific confi
 - Cleaner code within client.fs (separate some logic etc.)
 - Transaction support
 - +++
-
-Please do whatever you want with this code, but please share.
 
 ---
 NuGet: http://www.nuget.org/packages/CASO.DB.Titan.RexPro
