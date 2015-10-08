@@ -1,3 +1,9 @@
+####!!! No longer maintained !!!
+I have not found the time to maintain this project, so there is much to be done before 
+this could be considered production ready.
+
+---
+
 RexPro client in F#
 ---
 
